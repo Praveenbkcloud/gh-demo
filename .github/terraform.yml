@@ -1,0 +1,48 @@
+name: Dynamic Terraform Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.set-matrix.outputs.dirs }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect changed folders
+        id: set-matrix
+        run: |
+          CHANGED=$(git diff --name-only origin/main...HEAD | cut -d/ -f2 | sort -u)
+          echo "Changed dirs: $CHANGED"
+
+          JSON=$(printf '%s\n' $CHANGED | jq -R -s -c 'split("\n")[:-1]')
+          echo "dirs=$JSON" >> $GITHUB_OUTPUT
+
+  terraform:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect-changes.outputs.dirs) }}
+
+    defaults:
+      run:
+        working-directory: infra/${{ matrix.dir }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan
