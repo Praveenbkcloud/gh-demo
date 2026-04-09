@@ -12,3 +12,4 @@ resource "aws_s3_bucket" "bucket" {
 
 #commentd out for now, will be used in future
 #resource "aws_s3_bucket_object" "example" {
+####
