@@ -1,62 +1,61 @@
-name: Terraform Pipeline
+name: Dynamic Terraform Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
-  vpc:
-    if: contains(github.event.head_commit.message, '') || github.event_name == 'push'
+  detect:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra/vpc
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: set
+        run: |
+          echo "Detecting changed infra folders..."
+
+          CHANGED=$(git diff --name-only HEAD~1 HEAD || git ls-files)
+
+          echo "$CHANGED"
+
+          DIRS=$(echo "$CHANGED" | grep '^infra/' | cut -d/ -f2 | sort -u)
+
+          ARRAY=()
+          for dir in $DIRS; do
+            if [ -n "$dir" ]; then
+              ARRAY+=("\"$dir\"")
+            fi
+          done
+
+          JSON="[$(IFS=,; echo "${ARRAY[*]}")]"
+
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+          echo "Final matrix: $JSON"
+
+  terraform:
+    needs: detect
+    if: needs.detect.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run only if VPC changed
-        run: |
-          git diff --name-only HEAD~1 HEAD | grep '^infra/vpc/' || exit 0
+      - name: Debug
+        run: echo "Running for ${{ matrix.dir }}"
 
-      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform Init
+        working-directory: infra/${{ matrix.dir }}
+        run: terraform init
 
-      - run: terraform init
-      - run: terraform plan
-
-  ec2:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra/ec2
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run only if EC2 changed
-        run: |
-          git diff --name-only HEAD~1 HEAD | grep '^infra/ec2/' || exit 0
-
-      - uses: hashicorp/setup-terraform@v3
-
-      - run: terraform init
-      - run: terraform plan
-
-  s3:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra/s3
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run only if S3 changed
-        run: |
-          git diff --name-only HEAD~1 HEAD | grep '^infra/s3/' || exit 0
-
-      - uses: hashicorp/setup-terraform@v3
-
-      - run: terraform init
-      - run: terraform plan
+      - name: Terraform Plan
+        working-directory: infra/${{ matrix.dir }}
+        run: terraform plan
