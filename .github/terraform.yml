@@ -1,4 +1,4 @@
-name: Dynamic Terraform Pipeline
+name: Terraform Pipeline
 
 on:
   push:
@@ -6,95 +6,57 @@ on:
       - main
 
 jobs:
-  detect-changes:
+  vpc:
+    if: contains(github.event.head_commit.message, '') || github.event_name == 'push'
     runs-on: ubuntu-latest
-    outputs:
-      dirs: ${{ steps.set-matrix.outputs.dirs }}
+    defaults:
+      run:
+        working-directory: infra/vpc
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Detect changed folders
-        id: set-matrix
+      - name: Run only if VPC changed
         run: |
-          echo "===== Detecting Changes ====="
+          git diff --name-only HEAD~1 HEAD | grep '^infra/vpc/' || exit 0
 
-          # Handle first commit
-          if git rev-parse HEAD~1 >/dev/null 2>&1; then
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-          else
-            CHANGED_FILES=$(git ls-files)
-          fi
+      - uses: hashicorp/setup-terraform@v3
 
-          echo "Changed files:"
-          echo "$CHANGED_FILES"
+      - run: terraform init
+      - run: terraform plan
 
-          # Extract only infra folders
-          DIRS=$(echo "$CHANGED_FILES" | grep '^infra/' | cut -d/ -f2 | sort -u)
-
-          echo "Raw dirs:"
-          echo "$DIRS"
-
-          # Convert to JSON and remove empty values
-          JSON=$(printf '%s\n' $DIRS | jq -R . | jq -s 'map(select(length > 0))')
-
-          echo "Final JSON:"
-          echo "$JSON"
-
-          # Set output safely
-          if [ "$JSON" = "[]" ] || [ -z "$JSON" ]; then
-            echo "dirs=[]" >> $GITHUB_OUTPUT
-          else
-            echo "dirs=$JSON" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Debug output
-        run: echo "Dirs = ${{ steps.set-matrix.outputs.dirs }}"
-
-  terraform:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.dirs != '[]'
+  ec2:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        dir: ${{ fromJson(needs.detect-changes.outputs.dirs) }}
+    defaults:
+      run:
+        working-directory: infra/ec2
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Debug matrix value
-        run: echo "Running for directory: ${{ matrix.dir }}"
-
-      - name: Ensure directory exists
+      - name: Run only if EC2 changed
         run: |
-          if [ ! -d "infra/${{ matrix.dir }}" ]; then
-            echo "Directory infra/${{ matrix.dir }} does not exist"
-            exit 1
-          fi
+          git diff --name-only HEAD~1 HEAD | grep '^infra/ec2/' || exit 0
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      - uses: hashicorp/setup-terraform@v3
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan
 
-      - name: Terraform Init
-        working-directory: infra/${{ matrix.dir }}
-        run: terraform init
+  s3:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/s3
 
-      - name: Terraform Validate
-        working-directory: infra/${{ matrix.dir }}
-        run: terraform validate
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Terraform Plan
-        working-directory: infra/${{ matrix.dir }}
-        run: terraform plan
+      - name: Run only if S3 changed
+        run: |
+          git diff --name-only HEAD~1 HEAD | grep '^infra/s3/' || exit 0
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: terraform init
+      - run: terraform plan
