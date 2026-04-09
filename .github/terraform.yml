@@ -1,0 +1,87 @@
+name: Dynamic Terraform Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dirs: ${{ steps.set-matrix.outputs.dirs }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # IMPORTANT for git diff
+
+      - name: Detect changed folders
+        id: set-matrix
+        run: |
+          echo "Detecting changes..."
+
+          # Handle first commit safely
+          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          else
+            CHANGED_FILES=$(git ls-files)
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # Extract only infra folder modules (vpc, ec2, s3)
+          DIRS=$(echo "$CHANGED_FILES" | grep '^infra/' | cut -d/ -f2 | sort -u)
+
+          if [ -z "$DIRS" ]; then
+            echo "No infra changes detected"
+            echo "dirs=[]" >> $GITHUB_OUTPUT
+          else
+            JSON=$(printf '%s\n' $DIRS | jq -R -s -c 'split("\n")[:-1]')
+            echo "Detected dirs: $JSON"
+            echo "dirs=$JSON" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Debug output
+        run: echo "Final dirs = ${{ steps.set-matrix.outputs.dirs }}"
+
+  terraform:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.dirs != '[]'
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        dir: ${{ fromJson(needs.detect-changes.outputs.dirs) }}
+
+    defaults:
+      run:
+        working-directory: infra/${{ matrix.dir }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Show current directory
+        run: pwd && ls -la
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan
