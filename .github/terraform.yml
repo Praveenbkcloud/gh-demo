@@ -15,14 +15,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # IMPORTANT for git diff
+          fetch-depth: 0
 
       - name: Detect changed folders
         id: set-matrix
         run: |
-          echo "Detecting changes..."
+          echo "===== Detecting Changes ====="
 
-          # Handle first commit safely
+          # Handle first commit
           if git rev-parse HEAD~1 >/dev/null 2>&1; then
             CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
           else
@@ -32,20 +32,27 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
-          # Extract only infra folder modules (vpc, ec2, s3)
+          # Extract only infra folders
           DIRS=$(echo "$CHANGED_FILES" | grep '^infra/' | cut -d/ -f2 | sort -u)
 
-          if [ -z "$DIRS" ]; then
-            echo "No infra changes detected"
+          echo "Raw dirs:"
+          echo "$DIRS"
+
+          # Convert to JSON and remove empty values
+          JSON=$(printf '%s\n' $DIRS | jq -R . | jq -s 'map(select(length > 0))')
+
+          echo "Final JSON:"
+          echo "$JSON"
+
+          # Set output safely
+          if [ "$JSON" = "[]" ] || [ -z "$JSON" ]; then
             echo "dirs=[]" >> $GITHUB_OUTPUT
           else
-            JSON=$(printf '%s\n' $DIRS | jq -R -s -c 'split("\n")[:-1]')
-            echo "Detected dirs: $JSON"
             echo "dirs=$JSON" >> $GITHUB_OUTPUT
           fi
 
       - name: Debug output
-        run: echo "Final dirs = ${{ steps.set-matrix.outputs.dirs }}"
+        run: echo "Dirs = ${{ steps.set-matrix.outputs.dirs }}"
 
   terraform:
     needs: detect-changes
@@ -56,13 +63,19 @@ jobs:
       matrix:
         dir: ${{ fromJson(needs.detect-changes.outputs.dirs) }}
 
-    defaults:
-      run:
-        working-directory: infra/${{ matrix.dir }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Debug matrix value
+        run: echo "Running for directory: ${{ matrix.dir }}"
+
+      - name: Ensure directory exists
+        run: |
+          if [ ! -d "infra/${{ matrix.dir }}" ]; then
+            echo "Directory infra/${{ matrix.dir }} does not exist"
+            exit 1
+          fi
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -74,14 +87,14 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Show current directory
-        run: pwd && ls -la
-
       - name: Terraform Init
+        working-directory: infra/${{ matrix.dir }}
         run: terraform init
 
       - name: Terraform Validate
+        working-directory: infra/${{ matrix.dir }}
         run: terraform validate
 
       - name: Terraform Plan
+        working-directory: infra/${{ matrix.dir }}
         run: terraform plan
